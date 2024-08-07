@@ -1,9 +1,10 @@
 import { buildSync } from "esbuild";
 import { rmSync, mkdirSync, cpSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import {fileURLToPath} from "node:url"
 
-const { pathname } = new URL("..", import.meta.url);
-process.chdir(pathname);
+const path = fileURLToPath(new URL("..", import.meta.url));
+process.chdir(path);
 
 buildSync({
   entryPoints: ["src/extension.ts", "src/web-extension.ts"],
