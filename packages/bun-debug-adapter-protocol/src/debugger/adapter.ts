@@ -165,6 +165,7 @@ type Scope = DAP.Scope & {
 type Variable = DAP.Variable & {
   objectId?: string;
   objectGroup?: string;
+  size?: number;
   type: JSC.Runtime.RemoteObject["type"] | JSC.Runtime.RemoteObject["subtype"];
 };
 
@@ -1857,7 +1858,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   }
 
   async variables(request: DAP.VariablesRequest): Promise<DAP.VariablesResponse> {
-    const { variablesReference, start, count } = request;
+    const { variablesReference, start, count, filter } = request;
     const variable = this.#getVariable(variablesReference);
 
     let variables: Variable[];
@@ -1866,7 +1867,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     } else if (Array.isArray(variable)) {
       variables = variable;
     } else {
-      variables = await this.#getProperties(variable, start, count);
+      variables = await this.#getProperties(variable, start, count, filter);
     }
 
     return {
@@ -1938,12 +1939,12 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       objectId,
       objectGroup,
       variablesReference,
+      size,
       type: subtype || type,
       value: remoteObjectToString(remoteObject),
       name: propertyDescriptorToName(propertyDescriptor),
       evaluateName: propertyDescriptorToEvaluateName(propertyDescriptor, evaluateName),
       indexedVariables: isArrayLike(subtype) ? size : undefined,
-      namedVariables: isMap(subtype) ? size : undefined,
       presentationHint: remoteObjectToVariablePresentationHint(remoteObject, propertyDescriptor),
     };
 
@@ -1954,18 +1955,52 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     return variable;
   }
 
-  async #getProperties(variable: Variable, offset?: number, count?: number): Promise<Variable[]> {
-    const { objectId, objectGroup, type, evaluateName, indexedVariables, namedVariables } = variable;
+  async #getProperties(variable: Variable, offset?: number, count?: number, filter?: "indexed" | "named"): Promise<Variable[]> {
+    const { objectId, objectGroup, type, evaluateName, size } = variable;
     const variables: Variable[] = [];
-
+    let response: JSC.Runtime.GetPropertiesResponse;
     if (!objectId || type === "symbol") {
       return variables;
     }
 
-    const { properties, internalProperties } = await this.send("Runtime.getDisplayableProperties", {
-      objectId,
-      generatePreview: true,
-    });
+    if (isArrayLike(type) && filter !== undefined) {
+      function isIndexProperty(p: JSC.Runtime.PropertyDescriptor) {
+        return !isNaN(Number(p.name));
+      }
+      if (filter === "named") {
+        response = await this.send("Runtime.getProperties", {
+          objectId,
+          ownProperties: true,
+          generatePreview: true
+          // It is hard to extract only named properties from the array, so I'll implement it later
+          // fetchStart: offset,
+          // fetchCount: count
+        });
+        response.properties = response.properties.filter((p) => !isIndexProperty(p));
+      } else if (filter === "indexed") {
+        response = await this.send("Runtime.getProperties", {
+          objectId,
+          generatePreview: true,
+          fetchStart: offset,
+          fetchCount: count
+        });
+        response.properties = response.properties.filter(isIndexProperty);
+      } else {
+        // This branch is unreachable, but we don't want red code
+        response = {
+          properties: [],
+          internalProperties: undefined
+        };
+      }
+    } else {
+      response = await this.send("Runtime.getDisplayableProperties", {
+        objectId,
+        generatePreview: true,
+        fetchStart: offset,
+        fetchCount: count
+      });
+    }
+    let { properties, internalProperties } = response;
 
     for (const property of properties) {
       variables.push(...this.#addProperty(property, { objectGroup, evaluateName, parentType: type }));
@@ -1979,7 +2014,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       }
     }
 
-    const hasEntries = type !== "array" && (indexedVariables || namedVariables);
+    const hasEntries = type !== "array" && size;
     if (hasEntries) {
       const { entries } = await this.send("Runtime.getCollectionEntries", {
         objectId,
