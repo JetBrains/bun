@@ -414,11 +414,6 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     });
     this.send("Debugger.setAsyncStackTraceDepth", { depth: 200 });
 
-    const { clientID, supportsConfigurationDoneRequest } = request;
-    if (!supportsConfigurationDoneRequest && clientID !== "vscode") {
-      this.configurationDone();
-    }
-
     // Tell the client what capabilities this adapter supports.
     return capabilities;
   }
@@ -1154,6 +1149,13 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
         enabled: filters.includes("microtask"),
       }),
     ]);
+
+    // According to DAP spec:
+    // client sends a `setExceptionBreakpoints` request if one or more `exceptionBreakpointFilters`
+    // have been defined (or if `supportsConfigurationDoneRequest` is not true)
+    if (!this.#initialized?.supportsConfigurationDoneRequest) {
+      this.configurationDone();
+    }
 
     return {
       breakpoints: [],
