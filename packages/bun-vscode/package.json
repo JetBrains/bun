@@ -232,6 +232,14 @@
                   "hot"
                 ],
                 "default": false
+              },
+              "transport": {
+                "type": "string",
+                "description": "The transport type used to communicate with bun runtime. Defaults `native` on Linux and macOS, `tcp` on Windows (because Windows does not support native transport).",
+                "enum": [
+                  "tcp",
+                  "native"
+                ]
               }
             }
           },

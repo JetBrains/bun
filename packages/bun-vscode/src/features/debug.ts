@@ -1,5 +1,6 @@
 import { DebugSession } from "@vscode/debugadapter";
 import { tmpdir } from "node:os";
+import { platform } from "node:process";
 import * as vscode from "vscode";
 import type { DAP } from "../../../bun-debug-adapter-protocol";
 import { DebugAdapter, UnixSignal } from "../../../bun-debug-adapter-protocol";
@@ -13,6 +14,7 @@ export const DEBUG_CONFIGURATION: vscode.DebugConfiguration = {
   cwd: "${workspaceFolder}",
   stopOnEntry: false,
   watchMode: false,
+  transport: platform === "win32" ? "tcp" : undefined,
 };
 
 export const RUN_CONFIGURATION: vscode.DebugConfiguration = {
@@ -24,6 +26,7 @@ export const RUN_CONFIGURATION: vscode.DebugConfiguration = {
   cwd: "${workspaceFolder}",
   noDebug: true,
   watchMode: false,
+  transport: platform === "win32" ? "tcp" : undefined,
 };
 
 const ATTACH_CONFIGURATION: vscode.DebugConfiguration = {
@@ -178,7 +181,7 @@ class FileDebugSession extends DebugSession {
     const uniqueId = sessionId ?? Math.random().toString(36).slice(2);
     const url = `ws+unix://${tmpdir()}/${uniqueId}.sock`;
 
-    this.adapter = new DebugAdapter(url);
+    this.adapter = new DebugAdapter();
     this.adapter.on("Adapter.response", response => this.sendResponse(response));
     this.adapter.on("Adapter.event", event => this.sendEvent(event));
     this.adapter.on("Adapter.reverseRequest", ({ command, arguments: args }) =>

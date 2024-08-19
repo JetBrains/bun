@@ -8,6 +8,7 @@ import { EventEmitter } from "node:events";
 import { WebSocketInspector, remoteObjectToString } from "../../../bun-inspector-protocol/index";
 import { UnixSignal, randomUnixPath } from "./signal";
 import { Location, SourceMap } from "./sourcemap";
+import { generateDebuggerUrl } from "./debuggerUrl.ts";
 
 const capabilities: DAP.Capabilities = {
   supportsConfigurationDoneRequest: true,
@@ -104,6 +105,7 @@ type LaunchRequest = DAP.LaunchRequest & {
   stopOnEntry?: boolean;
   noDebug?: boolean;
   watchMode?: boolean | "hot";
+  transport?: "tcp" | "native";
 };
 
 type AttachRequest = DAP.AttachRequest & {
@@ -192,6 +194,8 @@ export type DebugAdapterEventMap = InspectorEventMap & {
   "Process.stdout": [string];
   "Process.stderr": [string];
 };
+
+const BUN_INSPECTOR_URL_PREFIX = 'Inspect in browser:';
 
 const isDebug = process.env.NODE_ENV === "development";
 const debugSilentEvents = new Set(["Adapter.event", "Inspector.event"]);
@@ -432,7 +436,12 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     this.#options = { ...request, type: "launch" };
 
     try {
-      await this.#launch(request);
+      if (this.#options.transport === "tcp") {
+        const url = await generateDebuggerUrl();
+        await this.#launchWithTcp(request, url);
+      } else if (!this.#options.transport || this.#options.transport === "native") {
+        await this.#launchWithNativeTransport(request, `ws+unix://${randomUnixPath()}`);
+      }
     } catch (error) {
       // Some clients, like VSCode, will show a system-level popup when a `launch` request fails.
       // Instead, we want to show the error as a sidebar notification.
@@ -445,7 +454,75 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     }
   }
 
-  async #launch(request: LaunchRequest): Promise<void> {
+  async #launchWithTcp(request: LaunchRequest, url: string): Promise<void> {
+    const {
+      runtime = "bun",
+      runtimeArgs = [],
+      program,
+      args = [],
+      cwd,
+      env = {},
+      strictEnv = false,
+      watchMode = false,
+      stopOnEntry = false,
+    } = request;
+
+    if (!program) {
+      throw new Error("No program specified. Did you set the 'program' property in your launch.json?");
+    }
+
+    if (!isJavaScript(program)) {
+      throw new Error("Program must be a JavaScript or TypeScript file.");
+    }
+
+    function filterInspectArgs(args: string[]) {
+      const inspectFlags = ['--inspect-brk', '--inspect-wait', '--inspect'];
+      return args.filter(arg => !inspectFlags.some(f => arg.startsWith(f)));
+    }
+
+    const runtimeArgsWithoutInspect = filterInspectArgs(runtimeArgs);
+    const processArgs = [...runtimeArgsWithoutInspect, program, ...args];
+
+    if (isTestJavaScript(program) && !runtimeArgs.includes("test")) {
+      processArgs.unshift("test");
+    }
+
+    if (watchMode && !runtimeArgs.includes("--watch") && !runtimeArgs.includes("--hot")) {
+      processArgs.unshift(watchMode === "hot" ? "--hot" : "--watch");
+    }
+
+    const inspectPrefix = stopOnEntry ? "--inspect-brk" : "--inspect-wait";
+    processArgs.unshift(`${inspectPrefix}=${url}`);
+
+    const processEnv = strictEnv
+      ? {
+        ...env,
+      }
+      : {
+        ...process.env,
+        ...env,
+      };
+
+    // This is probably not correct, but it's the best we can do for now.
+    processEnv["FORCE_COLOR"] = "1";
+    processEnv["BUN_QUIET_DEBUG_LOGS"] = "1";
+    processEnv["BUN_DEBUG_QUIET_LOGS"] = "1";
+
+    const started = await this.#spawn({
+                                        command: runtime,
+                                        args: processArgs,
+                                        env: processEnv,
+                                        cwd,
+                                        isDebugee: true,
+                                        debuggerReadyCallback: () => this.#attach({ url })
+                                      });
+
+    if (!started) {
+      throw new Error("Program could not be started.");
+    }
+  }
+
+  async #launchWithNativeTransport(request: LaunchRequest, url: string): Promise<void> {
     const {
       runtime = "bun",
       runtimeArgs = [],
@@ -478,14 +555,13 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
 
     const processEnv = strictEnv
       ? {
-          ...env,
-        }
+        ...env,
+      }
       : {
-          ...process.env,
-          ...env,
-        };
+        ...process.env,
+        ...env,
+      };
 
-    const url = `ws+unix://${randomUnixPath()}`;
     const signal = new UnixSignal();
 
     signal.on("Signal.received", () => {
@@ -506,12 +582,12 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     processEnv["BUN_DEBUG_QUIET_LOGS"] = "1";
 
     const started = await this.#spawn({
-      command: runtime,
-      args: processArgs,
-      env: processEnv,
-      cwd,
-      isDebugee: true,
-    });
+                                        command: runtime,
+                                        args: processArgs,
+                                        env: processEnv,
+                                        cwd,
+                                        isDebugee: true,
+                                      });
 
     if (!started) {
       throw new Error("Program could not be started.");
@@ -524,8 +600,9 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     cwd?: string;
     env?: Record<string, string | undefined>;
     isDebugee?: boolean;
+    debuggerReadyCallback?: () => void;
   }): Promise<boolean> {
-    const { command, args = [], cwd, env, isDebugee } = options;
+    const { command, args = [], cwd, env, isDebugee, debuggerReadyCallback } = options;
     const request = { command, args, cwd, env };
     this.emit("Process.requested", request);
 
@@ -571,7 +648,11 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     });
 
     subprocess.stderr?.on("data", data => {
-      this.emit("Process.stderr", data.toString());
+      let output = data.toString();
+      this.emit("Process.stderr", output);
+      if (output.includes(BUN_INSPECTOR_URL_PREFIX) && debuggerReadyCallback !== undefined) {
+        debuggerReadyCallback();
+      }
     });
 
     return new Promise(resolve => {
