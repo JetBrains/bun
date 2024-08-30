@@ -52,7 +52,7 @@
     "string-width": "7.0.0",
     "stripe": "15.4.0",
     "supertest": "6.3.3",
-    "svelte": "3.55.1",
+    "svelte": "4.2.19",
     "typescript": "5.0.2",
     "undici": "5.20.0",
     "verdaccio": "5.27.0",
