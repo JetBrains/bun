@@ -9,6 +9,10 @@ import { WebSocketInspector, remoteObjectToString } from "../../../bun-inspector
 import { UnixSignal, randomUnixPath } from "./signal";
 import { Location, SourceMap } from "./sourcemap";
 import { generateDebuggerUrl } from "./debuggerUrl.ts";
+import { generateUrlRegex } from "./urlMapper.ts";
+import { join, sep } from "node:path";
+import { platform } from "node:process";
+import { isAbsolutePath } from "./paths.ts";
 
 const capabilities: DAP.Capabilities = {
   supportsConfigurationDoneRequest: true,
@@ -874,7 +878,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       let result;
       try {
         result = await this.send("Debugger.setBreakpointByUrl", {
-          url,
+          urlRegex: generateUrlRegex(url),
           lineNumber: 0,
         });
       } catch (error) {
@@ -1047,8 +1051,8 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   #addFutureBreakpoint(options: { breakpointId: string; url: string; breakpoint: DAP.SourceBreakpoint }): Breakpoint {
     const { breakpointId, url, breakpoint } = options;
 
-    const breakpoints = this.#getFutureBreakpoints(breakpointId);
-    breakpoints.push({
+    const futureBreakpoints = this.#getFutureBreakpoints(breakpointId);
+    futureBreakpoints.push({
       url,
       breakpoint,
     });
@@ -1400,6 +1404,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   }
 
   async ["Debugger.scriptParsed"](event: JSC.Debugger.ScriptParsedEvent): Promise<void> {
+    // Bun returns OS specific path instead of the URL
     const { url, scriptId, sourceMapURL } = event;
 
     // If no url is present, the script is from a `evaluate` request.
@@ -1411,7 +1416,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     // 1. If it has a `path`, the client retrieves the source from the file system.
     // 2. If it has a `sourceReference`, the client sends a `source` request.
     //    Moreover, the code is usually shown in a read-only editor.
-    const isUserCode = url.startsWith("/");
+    const isUserCode = isUserScript(url);
     const sourceMap = SourceMap(sourceMapURL);
     const name = sourceName(url);
     const presentationHint = sourcePresentationHint(url);
@@ -1469,7 +1474,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       const requests = futureBreakpoints.map(({ breakpoint }) => breakpoint);
 
       const oldBreakpoints = this.#getBreakpointsById(breakpointId);
-      const breakpoints = await this.#setBreakpointsByUrl(url, requests);
+      const breakpoints = await this.#setBreakpointsById(location.scriptId, requests);
 
       for (let i = 0; i < breakpoints.length; i++) {
         const breakpoint = breakpoints[i];
@@ -1730,7 +1735,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
 
     // If the source does not have a path or is a builtin module,
     // it cannot be retrieved from the file system.
-    if (typeof sourceId === "number" || !sourceId.startsWith("/")) {
+    if (typeof sourceId === "number" || !isAbsolutePath(sourceId)) {
       throw new Error(`Source not found: ${sourceId}`);
     }
 
@@ -2266,8 +2271,12 @@ function titleize(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+function isUserScript(filePathOrUrl: string) {
+  return isAbsolutePath(filePathOrUrl);
+}
+
 function sourcePresentationHint(url?: string): DAP.Source["presentationHint"] {
-  if (!url || !url.startsWith("/")) {
+  if (!url || !isUserScript(url)) {
     return "deemphasize";
   }
   if (url.includes("/node_modules/")) {
@@ -2404,10 +2413,20 @@ function consoleMessageGroup(type: JSC.Console.ConsoleMessage["type"]): DAP.Outp
   return undefined;
 }
 
+function upperCaseDriveLetter(path: string): string {
+  if (path && platform === "win32") {
+    const [driveLetter, ...segments] = path.split(sep);
+    return join(driveLetter.toUpperCase(), ...segments);
+  }
+
+  return path;
+}
+
 function sourceToId(source?: DAP.Source): string | number {
   const { path, sourceReference } = source ?? {};
   if (path) {
-    return path;
+    // Some clients, like VSCode, use lowercase drive letters, but Bun uses uppercase
+    return upperCaseDriveLetter(path);
   }
   if (sourceReference) {
     return sourceReference;
