@@ -9,7 +9,7 @@ import { WebSocketInspector, remoteObjectToString } from "../../../bun-inspector
 import { UnixSignal, randomUnixPath } from "./signal";
 import { Location, SourceMap } from "./sourcemap";
 import { generateDebuggerUrl } from "./debuggerUrl.ts";
-import { generateUrlRegex } from "./urlMapper.ts";
+import { generateScriptRegex } from "./urlMapper.ts";
 import { join, sep } from "node:path";
 import { platform } from "node:process";
 import { isAbsolutePath } from "./paths.ts";
@@ -877,8 +877,9 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     if (!source) {
       let result;
       try {
+        const scriptRegex = await generateScriptRegex(url);
         result = await this.send("Debugger.setBreakpointByUrl", {
-          urlRegex: generateUrlRegex(url),
+          urlRegex: scriptRegex,
           lineNumber: 0,
         });
       } catch (error) {

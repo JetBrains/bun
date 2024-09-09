@@ -1,4 +1,4 @@
-import {toFileUrl} from "./paths.ts";
+import {toFileUrl, tryResolveSymlink} from "./paths.ts";
 
 const regexChars = new Set('/\\.?*()^${}|[]+'.split(''));
 
@@ -54,10 +54,7 @@ function trimDriveLetter(path: string) {
 const slashRe = '[\\\\/]';
 const forwardSlashOrDriveLetterRe = `(?:\\/|\\/?\\w:${slashRe})`;
 
-/**
- * TODO: resolve symlinks - originalUrl|symLinked
- */
-export function generateUrlRegex(absolutePathOrFileUrl: string, caseSensitive: boolean = false): string {
+function generatePathOrUrlRegex(absolutePathOrFileUrl: string, caseSensitive: boolean = false): string {
   const rawUrl = toFileUrl(absolutePathOrFileUrl);
   const urlString = trimDriveLetter(
     decodeURIComponent(rawUrl.toString().replace('file:///', ''))
@@ -68,4 +65,22 @@ export function generateUrlRegex(absolutePathOrFileUrl: string, caseSensitive: b
 
   const pathRegex = urlString.split('/').map(part => generateStringRegex(part, caseSensitive)).join(slashRe);
   return urlPrefixRe + pathRegex;
+}
+
+export async function generateScriptRegex(absolutePathOrFileUrl: string, resolveSymlinks: boolean = true, caseSensitive: boolean = false): Promise<string> {
+  const symlinkPathRegex = generatePathOrUrlRegex(absolutePathOrFileUrl, caseSensitive);
+  if (!resolveSymlinks) {
+    return symlinkPathRegex;
+  }
+
+  let realPath = await tryResolveSymlink(absolutePathOrFileUrl);
+  if (!realPath) {
+    return symlinkPathRegex;
+  }
+
+  const realPathRegex = generatePathOrUrlRegex(realPath, caseSensitive);
+  if (symlinkPathRegex === realPathRegex) {
+    return symlinkPathRegex;
+  }
+  return `${symlinkPathRegex}|${realPathRegex}`;
 }
