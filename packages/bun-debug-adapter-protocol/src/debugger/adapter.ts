@@ -224,6 +224,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   #variables: Map<number, Variable>;
   #initialized?: InitializeRequest;
   #options?: DebuggerOptions;
+  #configurationDone: boolean;
 
   constructor(url?: string | URL) {
     super();
@@ -247,6 +248,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     this.#targets = new Map();
     this.#variableId = 1;
     this.#variables = new Map();
+    this.#configurationDone = false;
   }
 
   /**
@@ -427,6 +429,11 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   }
 
   configurationDone(): void {
+    if (this.#configurationDone) {
+      return;
+    }
+    this.#configurationDone = true;
+
     // If the client requested that `noDebug` mode be enabled,
     // then we need to disable all breakpoints and pause on statements.
     const active = !this.#options?.noDebug;
@@ -2257,6 +2264,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     this.#targets.clear();
     this.#variables.clear();
     this.#options = undefined;
+    this.#configurationDone = false;
   }
 }
 
