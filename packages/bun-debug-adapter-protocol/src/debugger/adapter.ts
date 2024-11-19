@@ -469,6 +469,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       strictEnv = false,
       watchMode = false,
       stopOnEntry = false,
+      noDebug = false,
     } = request;
 
     if (!program) {
@@ -484,7 +485,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       return args.filter(arg => !inspectFlags.some(f => arg.startsWith(f)));
     }
 
-    const runtimeArgsWithoutInspect = filterInspectArgs(runtimeArgs);
+    const runtimeArgsWithoutInspect = noDebug ? runtimeArgs : filterInspectArgs(runtimeArgs);
     const processArgs = [...runtimeArgsWithoutInspect, program, ...args];
 
     if (isTestJavaScript(program) && !runtimeArgs.includes("test")) {
@@ -495,8 +496,10 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       processArgs.unshift(watchMode === "hot" ? "--hot" : "--watch");
     }
 
-    const inspectPrefix = stopOnEntry ? "--inspect-brk" : "--inspect-wait";
-    processArgs.unshift(`${inspectPrefix}=${url}`);
+    if (!noDebug) {
+      const inspectPrefix = stopOnEntry ? "--inspect-brk" : "--inspect-wait";
+      processArgs.unshift(`${inspectPrefix}=${url}`);
+    }
 
     const processEnv = strictEnv
       ? {
@@ -512,13 +515,19 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
     processEnv["BUN_QUIET_DEBUG_LOGS"] = "1";
     processEnv["BUN_DEBUG_QUIET_LOGS"] = "1";
 
+    const debuggerReadyCallback = () => {
+      if (!noDebug) {
+        this.#attach({ url });
+      }
+    };
+
     const started = await this.#spawn({
                                         command: runtime,
                                         args: processArgs,
                                         env: processEnv,
                                         cwd,
                                         isDebugee: true,
-                                        debuggerReadyCallback: () => this.#attach({ url })
+                                        debuggerReadyCallback,
                                       });
 
     if (!started) {
