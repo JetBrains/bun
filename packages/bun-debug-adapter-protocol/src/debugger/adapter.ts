@@ -38,13 +38,6 @@ const capabilities: DAP.Capabilities = {
       conditionDescription: `error.name == "CustomError"`,
     },
     {
-      filter: "debugger",
-      label: "Debugger Statements",
-      default: true,
-      supportsCondition: false,
-      description: "Breaks on `debugger` statements.",
-    },
-    {
       filter: "assert",
       label: "Assertion Failures",
       default: false,
@@ -423,6 +416,9 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       }
     });
     this.send("Debugger.setAsyncStackTraceDepth", { depth: 200 });
+    // WEB-68454: Bun inserts 'debugger' statements at the beginning of each file
+    // It should be enabled for 'stopOnEntry' to work
+    this.send("Debugger.setPauseOnDebuggerStatements", { enabled: true });
 
     // Tell the client what capabilities this adapter supports.
     return capabilities;
@@ -1243,9 +1239,6 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
       this.send("Debugger.setPauseOnExceptions", { state }),
       this.send("Debugger.setPauseOnAssertions", {
         enabled: filters.includes("assert"),
-      }),
-      this.send("Debugger.setPauseOnDebuggerStatements", {
-        enabled: filters.includes("debugger"),
       }),
       this.send("Debugger.setPauseOnMicrotasks", {
         enabled: filters.includes("microtask"),
