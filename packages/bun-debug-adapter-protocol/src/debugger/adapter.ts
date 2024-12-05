@@ -1,4 +1,5 @@
 import type { InspectorEventMap } from "../../../bun-inspector-protocol/src/inspector";
+import { logger } from "@vscode/debugadapter";
 import type { JSC } from "../../../bun-inspector-protocol/src/protocol";
 import type { DAP } from "../protocol";
 // @ts-ignore
@@ -13,6 +14,7 @@ import { generateScriptRegex } from "./urlMapper.ts";
 import { join, sep } from "node:path";
 import { platform } from "node:process";
 import { isAbsolutePath } from "./paths.ts";
+import { inspect } from "node:util";
 
 const capabilities: DAP.Capabilities = {
   supportsConfigurationDoneRequest: true,
@@ -195,7 +197,7 @@ export type DebugAdapterEventMap = InspectorEventMap & {
 const BUN_INSPECTOR_URL_PREFIX = 'Inspect in browser:';
 
 const isDebug = process.env.NODE_ENV === "development";
-const debugSilentEvents = new Set(["Adapter.event", "Inspector.event"]);
+const debugSilentEvents = new Set(["Adapter.event"]);
 
 let threadId = 1;
 
@@ -286,7 +288,7 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
    */
   emit<E extends keyof DebugAdapterEventMap>(event: E, ...args: DebugAdapterEventMap[E] | []): boolean {
     if (isDebug && !debugSilentEvents.has(event)) {
-      console.log(this.#threadId, event, ...args);
+      logger.log(JSON.stringify({ threadId: this.#threadId, event, args: serializeErrorsIfAny(args) }));
     }
 
     let sent = super.emit(event, ...(args as any));
@@ -1110,14 +1112,17 @@ export class DebugAdapter extends EventEmitter<DebugAdapterEventMap> implements 
   }
 
   #getBreakpointByLocation(source: Source, location: DAP.SourceBreakpoint): Breakpoint | undefined {
-    console.log("getBreakpointByLocation", {
-      source: sourceToId(source),
-      location,
-      ids: this.#getBreakpoints(sourceToId(source)).map(({ id }) => id),
-      breakpointIds: this.#getBreakpoints(sourceToId(source)).map(({ breakpointId }) => breakpointId),
-      lines: this.#getBreakpoints(sourceToId(source)).map(({ line }) => line),
-      columns: this.#getBreakpoints(sourceToId(source)).map(({ column }) => column),
-    });
+    logger.log(JSON.stringify({
+      method: "getBreakpointByLocation",
+      args: {
+        source: sourceToId(source),
+        location,
+        ids: this.#getBreakpoints(sourceToId(source)).map(({ id }) => id),
+        breakpointIds: this.#getBreakpoints(sourceToId(source)).map(({ breakpointId }) => breakpointId),
+        lines: this.#getBreakpoints(sourceToId(source)).map(({ line }) => line),
+        columns: this.#getBreakpoints(sourceToId(source)).map(({ column }) => column)
+      }
+    }));
     const sourceId = sourceToId(source);
     const [breakpoint] = this.#getBreakpoints(sourceId).filter(
       ({ source, request }) => source && sourceToId(source) === sourceId && request?.line === location.line,
@@ -2714,4 +2719,13 @@ let sequence = 1;
 
 function nextId(): number {
   return sequence++;
+}
+
+function serializeErrorsIfAny(args: any): any[] {
+  return args.map((arg: any) => {
+    if (arg instanceof Error) {
+      return inspect(arg, {depth: null});
+    }
+    return arg;
+  })
 }
